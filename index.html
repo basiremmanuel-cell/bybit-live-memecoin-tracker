@@ -1,1 +1,195 @@
 
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Emmanuel Bybit Live Memecoin Tracker</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#07111f;color:#eaf2ff;font-family:Arial,sans-serif;padding:15px}
+header{background:#10243b;padding:20px;border-radius:14px;margin-bottom:15px}
+h1{font-size:22px;color:#00e6a0;margin:0 0 8px}
+.sub{color:#a9bad0;font-size:13px}
+.stats{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:15px 0}
+.stat{background:#11243a;padding:15px;border-radius:12px}
+.stat small{color:#9bb1c9}
+.stat strong{display:block;font-size:20px;margin-top:7px}
+.green{color:#00e6a0}.red{color:#ff5968}.yellow{color:#ffcf55}
+button{background:#00c994;color:#041b17;border:0;border-radius:8px;padding:11px 15px;font-weight:bold}
+.controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:15px 0}
+input{background:#10243b;color:white;border:1px solid #36506d;padding:11px;border-radius:8px;min-width:130px}
+.tablewrap{overflow-x:auto;background:#10243b;border-radius:12px}
+table{border-collapse:collapse;width:100%;min-width:850px;font-size:13px}
+th,td{padding:13px 10px;border-bottom:1px solid #263c55;text-align:left}
+th{color:#9fb5ce;background:#142b45}
+.buy{color:#00e6a0;font-weight:bold}
+.sell{color:#ff5968;font-weight:bold}
+.hold{color:#ffcf55;font-weight:bold}
+.reason{max-width:260px;white-space:normal;color:#c5d4e5}
+footer{color:#91a5bd;font-size:12px;margin-top:18px;line-height:1.6}
+#status{margin:12px 0;color:#a9bad0;font-size:13px}
+</style>
+</head>
+<body>
+<header>
+<h1>EMMANUEL BYBIT MEMECOIN TRACKER</h1>
+<div class="sub">Public Bybit Spot market data • No API key • No wallet connection</div>
+<div class="sub">Automatic refresh every 10 seconds</div>
+</header>
+
+<div class="stats">
+<div class="stat"><small>Market pairs scanned</small><strong id="scanned">0</strong></div>
+<div class="stat"><small>Top opportunity</small><strong id="top">Waiting...</strong></div>
+<div class="stat"><small>BUY signals</small><strong class="green" id="buys">0</strong></div>
+<div class="stat"><small>Last update</small><strong id="updated">--:--:--</strong></div>
+</div>
+
+<div class="controls">
+<button onclick="loadMarket()">REFRESH NOW</button>
+<input id="search" placeholder="Search coin..." oninput="render()">
+</div>
+
+<div id="status">Connecting to Bybit public market data...</div>
+
+<div class="tablewrap">
+<table>
+<thead>
+<tr>
+<th>Rank</th><th>Coin</th><th>Price (USDT)</th>
+<th>24h Change</th><th>24h Turnover</th>
+<th>Score</th><th>Decision</th><th>Reason</th>
+</tr>
+</thead>
+<tbody id="rows">
+<tr><td colspan="8">Loading market data...</td></tr>
+</tbody>
+</table>
+</div>
+
+<footer>
+<strong>How to interpret the signals</strong><br>
+BUY = positive momentum and sufficient trading activity according to this tracker’s simple scoring model.<br>
+SELL = weak or negative momentum; review your position and risk.<br>
+HOLD = insufficient confirmation.<br><br>
+IMPORTANT: These are experimental market-screening signals, not guaranteed predictions or financial advice. This tracker does not identify actual whale wallets, predict profits, or execute trades. Always verify liquidity, spread, news and your own stop-loss before trading.
+</footer>
+
+<script>
+let markets=[];
+
+const excluded=[
+"USDCUSDT","USDEUSDT","DAIUSDT","USDTUSDT",
+"TUSDUSDT","FDUSDUSDT","EURUSDT"
+];
+
+function formatPrice(n){
+ if(!Number.isFinite(n)) return "--";
+ return n<0.01?n.toFixed(8):n<1?n.toFixed(5):n.toFixed(3);
+}
+
+function formatMoney(n){
+ if(n>=1e9)return "$"+(n/1e9).toFixed(2)+"B";
+ if(n>=1e6)return "$"+(n/1e6).toFixed(2)+"M";
+ if(n>=1e3)return "$"+(n/1e3).toFixed(1)+"K";
+ return "$"+n.toFixed(0);
+}
+
+function scoreMarket(m){
+ const change=Number(m.price24hPcnt)*100;
+ const turnover=Number(m.turnover24h);
+ const volume=Number(m.volume24h);
+
+ let score=50;
+ score+=Math.max(-25,Math.min(25,change*2));
+ if(turnover>1000000)score+=8;
+ if(turnover>5000000)score+=7;
+ if(volume>0)score+=5;
+ score=Math.max(0,Math.min(100,Math.round(score)));
+
+ let decision="HOLD";
+ let reason="Momentum is not sufficiently confirmed.";
+
+ if(change>3 && turnover>1000000 && score>=70){
+  decision="BUY";
+  reason="Positive 24h momentum with strong trading turnover. Verify entry and liquidity.";
+ }else if(change< -3){
+  decision="SELL";
+  reason="Negative 24h momentum. Avoid chasing falling prices; review risk.";
+ }else if(change>0){
+  reason="Price is positive, but confirmation is still limited.";
+ }else{
+  reason="Weak or sideways momentum. Wait for clearer confirmation.";
+ }
+
+ return {...m,change,turnover,score,decision,reason};
+}
+
+async function loadMarket(){
+ const status=document.getElementById("status");
+ status.textContent="Fetching live Bybit Spot market data...";
+
+ try{
+  const response=await fetch(
+   "https://api.bybit.com/v5/market/tickers?category=spot",
+   {cache:"no-store"}
+  );
+
+  if(!response.ok)throw new Error("Bybit returned HTTP "+response.status);
+
+  const data=await response.json();
+  if(data.retCode!==0)throw new Error(data.retMsg||"Market request failed");
+
+  markets=data.result.list
+   .filter(m=>m.symbol.endsWith("USDT"))
+   .filter(m=>!excluded.includes(m.symbol))
+   .filter(m=>Number(m.turnover24h)>100000)
+   .map(scoreMarket)
+   .sort((a,b)=>b.score-a.score)
+   .slice(0,100);
+
+  render();
+
+  document.getElementById("scanned").textContent=markets.length;
+  document.getElementById("buys").textContent=
+   markets.filter(m=>m.decision==="BUY").length;
+
+  document.getElementById("top").textContent=
+   markets.length?markets[0].symbol.replace("USDT",""):"None";
+
+  document.getElementById("updated").textContent=
+   new Date().toLocaleTimeString();
+
+  status.textContent="LIVE CONNECTION: Bybit Spot data received successfully.";
+
+ }catch(error){
+  status.textContent="Connection error: "+error.message+
+   ". Check internet access and try Refresh Now.";
+ }
+}
+
+function render(){
+ const query=document.getElementById("search").value.toUpperCase();
+ const filtered=markets.filter(m=>m.symbol.includes(query));
+
+ document.getElementById("rows").innerHTML=filtered.map((m,i)=>{
+  const decisionClass=m.decision.toLowerCase();
+  return `<tr>
+   <td>${i+1}</td>
+   <td><strong>${m.symbol}</strong></td>
+   <td>${formatPrice(Number(m.lastPrice))}</td>
+   <td class="${m.change>=0?"green":"red"}">${m.change.toFixed(2)}%</td>
+   <td>${formatMoney(m.turnover)}</td>
+   <td>${m.score}/100</td>
+   <td class="${decisionClass}">${m.decision}</td>
+   <td class="reason">${m.reason}</td>
+  </tr>`;
+ }).join("")||'<tr><td colspan="8">No matching coins found.</td></tr>';
+}
+
+loadMarket();
+setInterval(loadMarket,10000);
+</script>
+</body>
+</html>
+w
